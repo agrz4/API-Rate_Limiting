@@ -5,6 +5,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"sync"
 
 	"golang.org/x/time/rate"
 )
@@ -22,21 +23,19 @@ func getIP(r *http.Request) string {
 	return host
 }
 
+var ipLimiterMap sync.Map
+
 func rateLimiterMiddleware(next http.Handler, limit rate.Limit, burst int) http.Handler {
-	ipLimiterMap := make(map[string]*rate.Limiter)
 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Fetch IP
 		ip := getIP(r)
 
-		// Create limiter if not present for IP
-		limiter, exists := ipLimiterMap[ip]
-		if !exists {
-			limiter = rate.NewLimiter(limit, burst)
-			ipLimiterMap[ip] = limiter
-		}
+		// Check if the IP already has a limiter
+		limiterAny, _ := ipLimiterMap.LoadOrStore(ip, rate.NewLimiter(limit, burst))
+		limiter := limiterAny.(*rate.Limiter)
 
-		// return error if the limit has been reached
+		// Check if the limit has been reached
 		if !limiter.Allow() {
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusTooManyRequests)
@@ -44,13 +43,15 @@ func rateLimiterMiddleware(next http.Handler, limit rate.Limit, burst int) http.
 			return
 		}
 
+		log.Printf("%s %s", r.Method, r.URL.Path)
+
 		next.ServeHTTP(w, r)
 	})
 }
 
 func greetHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
-	response := Response{Message: "Hello, SuccessResponse"}
+	response := Response{Message: "Hello, Success Response"}
 	json.NewEncoder(w).Encode(response)
 }
 
